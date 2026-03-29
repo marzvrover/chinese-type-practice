@@ -1,12 +1,13 @@
-cmake_minimum_required(VERSION 2.6)
-project(TypeWar)
+cmake_minimum_required(VERSION 3.10)
+project(TypeWar VERSION 1.0 LANGUAGES C)
 
-set(CMAKE_BUILD_TYPE Release)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 
-include(FindPkgConfig)
-pkg_check_modules(GTK2 REQUIRED gtk+-2.0>=2.10)
-
-include_directories(${GTK2_INCLUDE_DIRS})
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4)
 
 add_executable(tw src/tw.c)
-target_link_libraries(tw ${GTK2_LIBRARIES})
+target_compile_features(tw PRIVATE c_std_99)
+target_link_libraries(tw PRIVATE PkgConfig::GTK4 m)

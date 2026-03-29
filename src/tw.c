@@ -27,7 +27,9 @@
 #include <math.h>
 #include <time.h>
 #include <string.h>
+#include <ctype.h>
 #include <fcntl.h>
+#include <glib/gstdio.h>
 
 struct unit
 {
@@ -169,15 +171,12 @@ static void display_units(cairo_t *cr)
     g_object_unref (layout);
 }
 
-static gboolean update_da(GtkWidget *w, GdkEventExpose *ev, gpointer ud)
+static void draw_func(GtkDrawingArea *area, cairo_t *cr, int width, int height, gpointer user_data)
 {
-    GdkRectangle *r = &ev->area;
-    GtkAllocation *al = &w->allocation;
-    cairo_t *cr = gdk_cairo_create(GDK_DRAWABLE(w->window));
+    gwidth = width;
+    gheight = height;
     cairo_set_source_rgb(cr, 0., 0., 0.);
-    cairo_rectangle(cr, r->x, r->y, r->width, r->height);
-    cairo_clip(cr);
-    cairo_rectangle(cr, r->x, r->y, r->width, r->height);
+    cairo_rectangle(cr, 0, 0, width, height);
     cairo_fill(cr);
     cairo_set_source_rgb(cr, 0.5, 0., 0.);
     cairo_translate(cr, gwidth/2., gheight/2.);
@@ -189,17 +188,9 @@ static gboolean update_da(GtkWidget *w, GdkEventExpose *ev, gpointer ud)
     display_units(cr);
     if(hp <= 0)
         display_gameover(cr);
-    cairo_destroy(cr);
-    return TRUE;
 }
 
-static void size_allocate(GtkWidget *w, GtkAllocation *alloc, gpointer ud)
-{
-    gwidth = alloc->width;
-    gheight = alloc->height;
-}
-
-static gboolean im_commit(GtkIMContext *imctx, gchar *str, gpointer ud)
+static void im_commit(GtkIMContext *imctx, gchar *str, gpointer ud)
 {
     int i;
     unit_t u;
@@ -214,24 +205,6 @@ static gboolean im_commit(GtkIMContext *imctx, gchar *str, gpointer ud)
             }
         }
     gtk_widget_queue_draw(GTK_WIDGET(ud));
-}
-
-static gboolean on_key_pressed(GtkWidget *w, GdkEventKey *ev, gpointer ud)
-{
-    gboolean ret = gtk_im_context_filter_keypress(GTK_IM_CONTEXT(ud), ev);
-    return ret;
-}
-
-static gboolean on_focus_in(GtkWidget *w, GdkEventFocus *ev, gpointer ud)
-{
-    gtk_im_context_set_client_window(GTK_IM_CONTEXT(ud), w->window);
-    gtk_im_context_focus_in(GTK_IM_CONTEXT(ud));
-}
-
-static gboolean on_focus_out(GtkWidget *w, GdkEventFocus *ev, gpointer ud)
-{
-    gtk_im_context_set_client_window(GTK_IM_CONTEXT(ud), NULL);
-    gtk_im_context_focus_out(GTK_IM_CONTEXT(ud));
 }
 
 static gboolean on_timeout(gpointer ud)
@@ -319,49 +292,65 @@ static void parse_input_file(gchar *file)
     }
 }
 
-int main(int argc, char *argv[])
+static void activate(GtkApplication *app, gpointer user_data)
 {
     GtkWidget *frame, *da;
     GtkIMContext *imctx;
+    GtkEventController *key_controller;
+
+    frame = gtk_application_window_new(app);
+    gtk_window_set_title(GTK_WINDOW(frame), "Type War");
+
+    da = gtk_drawing_area_new();
+    gtk_widget_set_focusable(da, TRUE);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(da), draw_func, NULL, NULL);
+    gtk_window_set_child(GTK_WINDOW(frame), da);
+
+    imctx = gtk_im_multicontext_new();
+    gtk_im_context_set_use_preedit(imctx, FALSE);
+    g_signal_connect(G_OBJECT(imctx), "commit", G_CALLBACK(im_commit), da);
+
+    key_controller = gtk_event_controller_key_new();
+    gtk_event_controller_key_set_im_context(GTK_EVENT_CONTROLLER_KEY(key_controller), imctx);
+    gtk_im_context_set_client_widget(imctx, da);
+    gtk_widget_add_controller(da, key_controller);
+
+    gtk_window_present(GTK_WINDOW(frame));
+    gtk_widget_grab_focus(da);
+
+    g_timeout_add(33, on_timeout, da);
+    g_timeout_add(freq, on_timeout2, NULL);
+}
+
+int main(int argc, char *argv[])
+{
+    GtkApplication *app;
+    int status;
 
     GError *error = NULL;
     GOptionContext *context;
 
     context = g_option_context_new("- chinese typing practice");
     g_option_context_add_main_entries(context, entries, NULL);
-    g_option_context_add_group(context, gtk_get_option_group (TRUE));
-    g_option_context_parse(context, &argc, &argv, &error);
+    g_option_context_set_ignore_unknown_options(context, TRUE);
+    if (!g_option_context_parse(context, &argc, &argv, &error)) {
+        g_printerr("%s\n", error->message);
+        g_error_free(error);
+        g_option_context_free(context);
+        return 1;
+    }
+    g_option_context_free(context);
 
     if (input_file)
         parse_input_file(input_file);
 
-    gtk_init(&argc, &argv);
-
     srandom(time(NULL));
+    move_offset = speed / fps;
 
-    move_offset = speed/fps;
+    app = gtk_application_new("org.kanru.typewar", G_APPLICATION_NON_UNIQUE);
+    g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
+    status = g_application_run(G_APPLICATION(app), 0, NULL);
+    g_object_unref(app);
 
-    frame = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(frame), "Type War");
-    g_signal_connect(G_OBJECT(frame), "destroy", G_CALLBACK(gtk_main_quit), NULL);
-
-    da = gtk_drawing_area_new();
-    gtk_container_add(GTK_CONTAINER(frame), da);
-	gtk_widget_add_events(da, GDK_KEY_PRESS_MASK);
-    g_signal_connect(G_OBJECT(da), "expose-event", G_CALLBACK(update_da), NULL);
-    g_signal_connect(G_OBJECT(da), "size-allocate", G_CALLBACK(size_allocate), NULL);
-
-    imctx = gtk_im_multicontext_new();
-    gtk_im_context_set_use_preedit(imctx, FALSE);
-    g_signal_connect(G_OBJECT(imctx), "commit", G_CALLBACK(im_commit), da);
-	g_signal_connect(G_OBJECT(frame), "key-press-event", G_CALLBACK(on_key_pressed), imctx);
-	g_signal_connect(G_OBJECT(frame), "focus-in-event", G_CALLBACK(on_focus_in), imctx);
-	g_signal_connect(G_OBJECT(frame), "focus-out-event", G_CALLBACK(on_focus_out), imctx);
-
-    gtk_widget_show_all(frame);
-    g_timeout_add(33, on_timeout, da);
-    g_timeout_add(freq, on_timeout2, NULL);
-
-    gtk_main();
-    return 0;
+    return status;
 }
